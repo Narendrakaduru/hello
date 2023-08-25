@@ -1,0 +1,149 @@
+pipeline {
+    agent { label 'master' }
+    
+    stages {
+         stage('Checkout code from SCM') {
+			steps{
+				cleanWs()
+				
+				checkout([$class: 'GitSCM',
+					branches: [
+						[name: "${BRANCH}"]
+					],
+					doGenerateSubmoduleConfigurations: false,
+					extensions: [],
+					gitTool: 'Default',
+					submoduleCfg: [],
+					userRemoteConfigs: [
+						[credentialsId: 'Node-Auth',
+							url: 'git@github.com:Narendrakaduru/${app_name}.git'
+						
+						]
+					]
+				])
+			}
+		}
+		stage('SCANS'){
+    		parallel{
+    		    stage('SONAR') {
+                    when {
+                        expression{
+                            params.CODE_SCAN == 'YES' && params.SCANS.contains('SONAR')
+                        }
+                    }
+                    environment {
+                        def scannerHome = tool 'sonarqube-scanner-4.8';
+                    }
+                    steps {
+                        echo '---------------------Sonar Scan starting-------------------------'
+                        script {
+                            if (app_name == "hello") {SONAR_PROJECT_NAME = 'hello-app'}
+                            if (app_name == "listen") {SONAR_PROJECT_NAME = 'listen-app'}
+                            withSonarQubeEnv(installationName: 'sonarqube-10.1') {
+                              sh "${scannerHome}/bin/sonar-scanner -X \
+                              -Dsonar.projectKey=$SONAR_PROJECT_NAME \
+                              -Dsonar.projectName=$SONAR_PROJECT_NAME \
+                              -Dsonar.host.url=http://192.168.1.122:9000 \
+                              -Dsonar.projectBaseDir=${WORKSPACE} \
+                              -Dsonar.sources=${WORKSPACE}/src/main/java \
+                              -Dsonar.java.binaries=${WORKSPACE}/target/classes \
+                              -Dsonar.exclusions=${WORKSPACE}/src/main/java \
+                              -Dsonar.binaries=${WORKSPACE}/src/main/java \
+                              "
+                            }
+                        }
+                    }
+                }
+                stage('FORTIFY') {
+                    when {
+                        expression{
+                            params.CODE_SCAN == 'YES' && params.SCANS.contains('FORTIFY')
+                        }
+                    }
+                    steps {
+                        echo 'Fortify Scann Done'
+                    }
+                }
+                stage('BD_SCAN') {
+                    when {
+                        expression{
+                            params.CODE_SCAN == 'YES' && params.SCANS.contains('BLACKDUCK')
+                        }
+                    }
+                    steps {
+                        echo 'BD Scann Done'
+                    }
+                }
+    		}
+		}
+		stage('Maven Build') {
+            steps {
+                sh '''
+                echo "----------------------  Building ${app_name}  ----------------------"
+				mvn clean install
+				echo "----------------------  Build Success  ----------------------"
+				cd target
+				mv ${app_name}-${app_version}-SNAPSHOT.jar ${app_name}.jar
+				tar -cvzf ${app_name}.tar.gz ${app_name}.jar
+				mv ${app_name}.tar.gz ${WORKSPACE}/
+				'''
+            }
+        }
+		stage('Publish Artifactory') {
+		  when {
+		      expression {
+		          params.DEPLOY  == 'YES'
+		      }
+		  }
+		  steps {
+			sh '''
+				cd ${WORKSPACE}/
+				echo "Uploading to Artifactory"
+				curl -X put -u ${ART_USER}:${ART_PASS} -T ${WORKSPACE}/${app_name}.tar.gz ${ART_URL}/${app_name}/${BUILD_NUMBER}/${app_name}.tar.gz
+				echo "Artifact uploaded to path ${ART_URL}/${app_name}/${BUILD_NUMBER}/"
+			'''
+		  }
+		}
+		stage('Deploy'){
+		    when {
+		      expression {
+		          params.DEPLOY  == 'YES'
+		      }
+		  }
+		  agent {
+		      label "${DEPLOY_NODE}"
+		  }
+		  steps{
+		      sh  '''
+		      whoami
+		      echo "------------------------------ Deployment started for the app ${app_name}-------------------------"
+		      export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+              export PATH=$PATH:$JAVA_HOME/bin
+		      DEPLOY_PATH=/apps/opt/application/${app_name}/staging
+		      cd $DEPLOY_PATH
+		      
+		      echo "Download from artifactory"
+		      curl -u ${ART_USER}:${ART_PASS} -XGET ${ART_URL}/${app_name}/${BUILD_NUMBER}/${app_name}.tar.gz -o ${app_name}.tar.gz
+		      echo "File Downloaded"
+		      
+		      SCRIPT_PATH=/apps/opt/application/${app_name}
+		      ls -lrt
+		      tar -xvf ${app_name}.tar.gz
+		      ls -lrt
+		      rm --f ${app_name}.tar.gz
+		      
+		      sh $SCRIPT_PATH/deploy_${app_name}_service.sh
+		      echo "Deployment Successful"
+		      '''
+		  }
+		}
+    }
+    tools {
+        maven 'M2_HOME'
+    }
+	environment {
+		ART_USER = "nani"
+		ART_PASS = "Pushpa76@"
+		ART_URL = "http://192.168.1.122:8081/artifactory/microservice-app/"
+	}
+}
