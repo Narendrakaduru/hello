@@ -1,0 +1,54 @@
+@Library('your-shared-library') _
+
+pipeline {
+    agent any
+
+    parameters {
+        choice(name: 'BUILD_TYPE', choices: ['UI', 'API'], description: 'Select the build type: UI or API')
+    }
+
+    stages {
+        stage('Git Clone') {
+            steps {
+                // Call the shared library function to clone the repository
+                buildUtils.gitClone('main', 'your-git-url')
+            }
+        }
+
+        stage('Build') {
+            steps {
+                // Call the shared library function to build
+                buildUtils.build(params.BUILD_TYPE)
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                // Call the shared library function to deploy
+                buildUtils.deploy()
+            }
+        }
+    }
+}
+
+
+def gitClone(String BRANCH, String gitPublicUrl) {
+	// Checkout the specified branch from the provided Git repository URL
+	git branch: BRANCH,
+		url: gitPublicUrl
+}
+
+def build(String buildType) {
+	// Build based on the build type
+	if (buildType == 'UI') {
+		sh 'cd path/to/frontend && npm install && ng build --prod'
+	} else if (buildType == 'API') {
+		sh 'mvn clean install -f path/to/backend/pom.xml'
+	}
+}
+
+def deploy() {
+	// Deploy your backend and frontend artifacts
+	// This could involve deploying to a server or a cloud platform
+	// For example, deploying backend to Tomcat or deploying frontend to AWS S3
+}
